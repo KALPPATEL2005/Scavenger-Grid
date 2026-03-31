@@ -16,3 +16,7 @@ models/
 # IDEs
 .vscode/
 .idea/
+
+# OS and Log files
+*.log
+.DS_Store

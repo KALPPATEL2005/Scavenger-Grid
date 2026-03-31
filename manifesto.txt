@@ -1,0 +1,4 @@
+The Scavenger Grid is a revolutionary approach to local computing. Instead of relying on expensive cloud servers, it harvests the latent compute power of everyday office computers. 
+When a legal aide steps away to get coffee, the grid awakens. It slices massive PDF case files into tiny semantic vectors, processing them locally.
+The moment the user touches their mouse, the Ghost Exit protocol fires. Hardware interrupts instantly suspend the AI workload, ensuring zero performance degradation for the human user.
+By utilizing SQLite-Vec and mDNS auto-discovery, the grid is entirely fault-tolerant and requires zero network configuration.
