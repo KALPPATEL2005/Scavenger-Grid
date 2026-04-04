@@ -19,3 +19,12 @@ class SemanticEngine:
             
         vector = [float(x) for x in vector_array]
         return vector
+    
+    def process_batch(self, texts: list[str]) -> list[list[float]]:
+        """
+        Processes multiple text chunks simultaneously using PyTorch vectorization.
+        This is exponentially faster than processing them one by one!
+        """
+        # sentence-transformers natively supports batching!
+        vectors = self.model.encode(texts, convert_to_numpy=True).tolist()
+        return vectors

@@ -1,13 +1,22 @@
 import sqlite3
 import sqlite_vec
 import json
+import os
 
-DB_FILE = "scavenger_vault.db"
+# Point to the new data directory
+DB_FILE = "data/scavenger_vault.db"
 
 class VectorVault:
     def __init__(self):
         print("[*] Initializing Master Vector Vault...")
+        
+        # Ensure the data directory exists
+        os.makedirs("data", exist_ok=True)
+        
         self.conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+        
+        # ENABLE WAL MODE for high-concurrency batch writes!
+        self.conn.execute("PRAGMA journal_mode=WAL;")
         
         # Load the modern sqlite-vec extension into SQLite
         self.conn.enable_load_extension(True)

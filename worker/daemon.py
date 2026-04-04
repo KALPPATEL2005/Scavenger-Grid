@@ -1,21 +1,23 @@
 import time
-import uuid
 import platform
 import psutil
 import httpx
 import socket
+import json
+import asyncio
+import websockets
 from zeroconf import Zeroconf
 
-# Import our shared protocols, the OS monitor, and our NEW AI Engine!
 from shared.protocol import WorkerRegistration, HardwareProfile, TaskStatus, TaskResult
 from worker.ghost_exit import ActivityMonitor
 from worker.compute_engine import SemanticEngine
 
-WORKER_ID = f"worker-{uuid.uuid4().hex[:8]}"
+# grabs the actual name of computer
+WORKER_ID = f"worker-{socket.gethostname().lower().replace(' ', '-')}"
 MASTER_URL = None
 
 monitor = ActivityMonitor(idle_threshold_sec=3)
-ai_engine = SemanticEngine()  # <-- Loads the PyTorch AI model into RAM on startup!
+ai_engine = SemanticEngine()
 
 def discover_master() -> str:
     print("[*] Searching for Scavenger Master on the local Wi-Fi (mDNS)...")
@@ -36,10 +38,8 @@ def discover_master() -> str:
 def get_hardware_profile() -> HardwareProfile:
     vm = psutil.virtual_memory()
     return HardwareProfile(
-        cpu_cores=psutil.cpu_count(logical=True),
-        ram_total_gb=round(vm.total / (1024 ** 3), 2),
-        ram_available_gb=round(vm.available / (1024 ** 3), 2),
-        os_name=f"{platform.system()} {platform.release()}",
+        cpu_cores=psutil.cpu_count(logical=True), ram_total_gb=round(vm.total / (1024 ** 3), 2),
+        ram_available_gb=round(vm.available / (1024 ** 3), 2), os_name=f"{platform.system()} {platform.release()}",
         is_idle=not monitor.is_user_active()
     )
 
@@ -55,64 +55,74 @@ def register_with_master():
         print(f"[!] Failed to connect to Master: {e}")
         return False
 
-def request_and_process_task():
+# --- THE NEW WEBSOCKET PIPELINE (WITH BATCHING) ---
+async def listen_and_process_tasks():
+    # Convert HTTP URL to WS URL
+    ws_url = MASTER_URL.replace("http://", "ws://") + f"/ws/{WORKER_ID}"
+    
     while True:
         try:
-            if monitor.is_user_active():
-                print("[-] User is active. Waiting in the shadows...")
-                time.sleep(2)
-                continue
-
-            print("[*] Polling Master for a task...")
-            response = httpx.get(f"{MASTER_URL}/tasks/{WORKER_ID}")
-            
-            if response.status_code == 200:
-                task = response.json()
-                task_id = task["task_id"]
-                print(f"[>] Received Task: {task_id}")
+            # 1. Open the permanent tunnel
+            async with websockets.connect(ws_url) as ws:
+                print("\n[+] WebSocket Tunnel established! Waiting silently for tasks...")
                 
-                # --- REAL AI WORK WITH PREEMPTION ---
-                start_time = time.time()
-                is_suspended = False
-                vector_result = None
-                
-                print("    [~] Processing chunk with PyTorch... (Move your mouse to trigger Ghost Exit!)")
-                
-                # 1. Check if user bumped mouse BEFORE starting the heavy math
-                if monitor.is_user_active():
-                    print("    [!!!] GHOST EXIT TRIGGERED: Interrupt detected before processing.")
-                    is_suspended = True
-                else:
-                    # 2. Run the actual AI model! (This takes a fraction of a second)
-                    vector_result = ai_engine.process_text(task["payload"])
+                while True:
+                    # 2. Block and wait infinitely with zero CPU usage!
+                    message = await ws.recv()
+                    tasks = json.loads(message) # This is now a LIST of tasks!
                     
-                    # 3. Check if user bumped mouse DURING the math
+                    print(f"\n[>] Master pushed a Batch of {len(tasks)} tasks...")
+                    
+                    start_time = time.time()
+                    is_suspended = False
+                    vectors = []
+                    
+                    # 3. Extract just the raw text paragraphs
+                    texts_to_process = [t["payload"] for t in tasks]
+                    
                     if monitor.is_user_active():
-                        print("    [!!!] GHOST EXIT TRIGGERED: Interrupt detected during math.")
+                        print("    [!!!] GHOST EXIT: User active. Rejecting batch.")
                         is_suspended = True
+                    else:
+                        print(f"    [~] Crunching {len(tasks)} chunks simultaneously in PyTorch...")
+                        # 4. RUN THE BATCH MATH!
+                        vectors = ai_engine.process_batch(texts_to_process)
+                        
+                        if monitor.is_user_active():
+                            print("    [!!!] GHOST EXIT: Interrupt detected during math.")
+                            is_suspended = True
 
-                processing_time = round(time.time() - start_time, 2)
-                final_status = TaskStatus.SUSPENDED if is_suspended else TaskStatus.COMPLETED
-                
-                # 4. Package the real mathematical vector to send back to the Master
-                result = TaskResult(
-                    task_id=task_id, 
-                    worker_id=WORKER_ID, 
-                    status=final_status,
-                    result_data=vector_result if not is_suspended else None,
-                    processing_time_sec=processing_time
-                )
-                
-                httpx.post(f"{MASTER_URL}/results", json=result.model_dump(mode='json'))
-                print(f"[{'!' if is_suspended else '✓'}] Sent {final_status.value.upper()} to Master in {processing_time}s!\n")
-                time.sleep(2)
-                
-            else:
-                time.sleep(5)
-                
+                    processing_time = round(time.time() - start_time, 2)
+                    final_status = TaskStatus.SUSPENDED if is_suspended else TaskStatus.COMPLETED
+                    
+                    # 5. Package ALL results into a single list
+                    batch_results = []
+                    for i, task in enumerate(tasks):
+                        res = TaskResult(
+                            task_id=task["task_id"], 
+                            worker_id=WORKER_ID, 
+                            status=final_status,
+                            result_data=vectors[i] if not is_suspended else None,
+                            processing_time_sec=processing_time # Total batch time
+                        )
+                        batch_results.append(res.model_dump(mode='json'))
+                    
+                    # 6. POST the massive payload back to the Master
+                    async with httpx.AsyncClient() as client:
+                        # Notice we hit the new /results/batch endpoint!
+                        await client.post(f"{MASTER_URL}/results/batch", json=batch_results)
+                        
+                    print(f"[{'!' if is_suspended else '✓'}] Sent {len(batch_results)} {final_status.value.upper()} tasks to Master in {processing_time}s!")
+                    
+                    if is_suspended:
+                        await asyncio.sleep(5)
+                        
+        except websockets.exceptions.ConnectionClosed:
+            print("[!] WebSocket connection lost. Reconnecting in 3s...")
+            await asyncio.sleep(3)
         except Exception as e:
-            print(f"[!] Connection error: {e}. Retrying in 5s...")
-            time.sleep(5)
+            print(f"[!] Network error: {e}. Retrying in 5s...")
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
     print("=== Scavenger Grid Worker Daemon ===")
@@ -120,4 +130,8 @@ if __name__ == "__main__":
     if MASTER_URL:
         monitor.start()
         if register_with_master():
-            request_and_process_task()
+            try:
+                # We now run the Worker entirely in Async mode!
+                asyncio.run(listen_and_process_tasks())
+            except KeyboardInterrupt:
+                print("\n[!] Ctrl+C detected. Shutting down this Scavenger Worker gracefully. Goodbye!")

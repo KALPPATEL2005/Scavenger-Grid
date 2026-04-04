@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scavenger Grid | Mission Control</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid #334155; }
+    </style>
+</head>
+<body class="min-h-screen p-8">
+
+    <div class="max-w-5xl mx-auto space-y-6">
+        <div class="flex items-center justify-between glass-panel p-6 rounded-xl shadow-lg">
+            <div>
+                <h1 class="text-3xl font-bold text-cyan-400 tracking-wide">SCAVENGER GRID</h1>
+                <p class="text-sm text-slate-400 mt-1">Distributed RAG Orchestrator</p>
+            </div>
+            <div class="flex items-center space-x-2">
+                <span class="relative flex h-3 w-3">
+                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+                </span>
+                <span class="text-sm font-semibold text-green-400">System Online</span>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-4 gap-4">
+            <div class="glass-panel p-4 rounded-xl text-center">
+                <p class="text-slate-400 text-sm">Active Workers</p>
+                <p id="stat-workers" class="text-3xl font-bold text-white mt-2">0</p>
+            </div>
+            <div class="glass-panel p-4 rounded-xl text-center">
+                <p class="text-slate-400 text-sm">Queued Tasks</p>
+                <p id="stat-queued" class="text-3xl font-bold text-yellow-400 mt-2">0</p>
+            </div>
+            <div class="glass-panel p-4 rounded-xl text-center">
+                <p class="text-slate-400 text-sm">In Progress</p>
+                <p id="stat-active" class="text-3xl font-bold text-blue-400 mt-2">0</p>
+            </div>
+            <div class="glass-panel p-4 rounded-xl text-center">
+                <p class="text-slate-400 text-sm">Vectors Vaulted</p>
+                <p id="stat-completed" class="text-3xl font-bold text-green-400 mt-2">0</p>
+            </div>
+        </div>
+
+        <div class="glass-panel rounded-xl shadow-lg overflow-hidden flex flex-col" style="height: 500px;">
+            <div class="p-4 border-b border-slate-700 bg-slate-800/50">
+                <h2 class="text-lg font-semibold text-cyan-400">Grid Intelligence (Llama-3)</h2>
+            </div>
+            
+            <div id="chat-box" class="flex-1 p-4 overflow-y-auto space-y-4 flex flex-col">
+                <div class="self-start bg-slate-700 text-white rounded-lg p-3 max-w-2xl text-sm">
+                    Connection established. I am ready to query the Vault. What would you like to know?
+                </div>
+            </div>
+
+            <div class="p-4 border-t border-slate-700 bg-slate-800/50 flex space-x-2">
+                <input type="text" id="chat-input" class="flex-1 bg-slate-900 text-white rounded-lg px-4 py-2 border border-slate-600 focus:outline-none focus:border-cyan-400" placeholder="Ask the Grid a question...">
+                <button onclick="sendMessage()" class="bg-cyan-600 hover:bg-cyan-500 text-white px-6 py-2 rounded-lg font-semibold transition-colors">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 1. Poll the Master for Telemetry every 2 seconds
+        setInterval(async () => {
+            try {
+                const res = await fetch('/health');
+                const data = await res.json();
+                document.getElementById('stat-workers').innerText = data.active_workers;
+                document.getElementById('stat-queued').innerText = data.queued_tasks;
+                document.getElementById('stat-active').innerText = data.in_progress_tasks;
+                document.getElementById('stat-completed').innerText = data.completed_tasks;
+            } catch (e) { console.error("Telemetry error", e); }
+        }, 2000);
+
+        // 2. Handle Chat AI
+        async function sendMessage() {
+            const input = document.getElementById('chat-input');
+            const box = document.getElementById('chat-box');
+            const query = input.value.trim();
+            if (!query) return;
+
+            // Add User Message
+            box.innerHTML += `<div class="self-end bg-cyan-700 text-white rounded-lg p-3 max-w-2xl text-sm mb-2 shadow-md">${query}</div>`;
+            input.value = '';
+            
+            // Add Loading Indicator
+            const loadingId = 'loading-' + Date.now();
+            box.innerHTML += `<div id="${loadingId}" class="self-start bg-slate-700 text-white rounded-lg p-3 text-sm animate-pulse">Thinking...</div>`;
+            box.scrollTop = box.scrollHeight;
+
+            try {
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query })
+                });
+                const data = await res.json();
+                
+                // Remove Loading, Add AI Answer
+                document.getElementById(loadingId).remove();
+                box.innerHTML += `
+                    <div class="self-start bg-slate-700 text-white rounded-lg p-4 max-w-2xl text-sm shadow-md border border-slate-600 mb-2">
+                        <p class="mb-2">${data.answer}</p>
+                        <p class="text-xs text-slate-400 border-t border-slate-600 pt-2 mt-2"><strong>Source Chunk:</strong> ${data.context.substring(0, 100)}...</p>
+                    </div>`;
+            } catch (e) {
+                document.getElementById(loadingId).innerText = "Error: Failed to connect to Master.";
+            }
+            box.scrollTop = box.scrollHeight;
+        }
+
+        // Allow pressing Enter to send
+        document.getElementById('chat-input').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') sendMessage();
+        });
+    </script>
+</body>
+</html>

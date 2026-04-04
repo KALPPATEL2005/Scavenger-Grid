@@ -8,10 +8,14 @@ __pycache__/
 *.pyc
 
 # Local Databases & Model Weights
-*.db
 *.sqlite
 models/
 *.onnx
+
+# Database and Documents
+data/
+*.db
+*.pdf
 
 # IDEs
 .vscode/
